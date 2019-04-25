@@ -1,0 +1,423 @@
+#!/bin/bash
+
+###############################################################################
+#
+# rpi-snapshot is Copyright (c) 2019 Alberto Lopez Siemens
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted under the conditions of the BSD LICENSE file at
+# the rpi-snapshot github source repository:
+#    https://github.com/AlbertoLopSie/rpi-snapshot
+#
+# Some ideas and code portions borrowed from https://github.com/billw2/rpi-clone
+###############################################################################
+
+version=1.0.0
+
+PGM=`basename $0`
+
+rsync_options="--force -rltWDEHXAgoptx"
+
+##################################################
+# Verifies we are running as root
+##################################################
+if [ `id -u` != 0 ]
+then
+    echo -e "$PGM needs to be run as root.\n"
+    exit 1
+fi
+
+#########################################################
+# Ask for confirmation y returns 0: Yes, 1: No or aborts
+#  if 2nd arg is "abort"
+#########################################################
+confirm()
+	{
+	if ((unattended || (initialize && Unattended) ))
+	then
+		return 0
+	fi
+	printf "\n%s  (yes/no): " "$1"
+	read resp
+	if [ "$resp" = "y" ] || [ "$resp" = "yes" ]
+	then
+		return 0
+	fi
+	if [ "$2" == "abort" ]
+	then
+		echo -e "Aborting!\n"
+		exit 0
+	fi
+	return 1
+	}
+
+##################################################
+# Checks all needed utilities are installed or
+# ask confirmation to install them
+##################################################
+commands="rsync  column"
+packages="rsync  bsdmainutils"
+need_packages=""
+
+idx=1
+for cmd in $commands
+do
+	if ! command -v $cmd > /dev/null
+	then
+		pkg=$(echo "$packages" | cut -d " " -f $idx)
+		printf "%-30s %s\n" "Command not found: $cmd" "Package required: $pkg"
+		need_packages="$need_packages $pkg"
+	fi
+	((++idx))
+done
+
+if [ "$need_packages" != "" ]
+then
+	confirm "Do you want to apt-get install the packages?" "abort"
+	apt-get install -y --no-install-recommends $need_packages
+fi
+
+
+##################################################
+# Sets global variables
+##################################################
+clone=/mnt/clone
+clone_src=/mnt/clone-src
+clone_log=/var/log/$PGM.log
+
+HOSTNAME=`hostname`
+
+readable()
+{
+	val=$1
+	if [ "$val" == "" ]
+	then
+		result="   ??"
+	else
+		blk_size=$2
+		val=$((val / 1000 * blk_size))
+
+		if ((val < 1000000))
+		then
+			result=$(echo $val \
+			| awk '{ byte =$1 /1000; printf "%.1f%s", byte, "MB" }')
+		elif ((val < 1000000000))
+		then
+			result=$(echo $val \
+			| awk '{ byte =$1 /1000/1000; printf "%.1f%s", byte, "GB" }')
+		else
+			result=$(echo $val \
+			| awk '{ byte =$1 /1000/1000/1000; printf "%.1f%s", byte, "TB" }')
+		fi
+	fi
+	printf -v "${3}" "%s" "$result"
+}
+
+qecho()
+{
+  if ((!quiet))
+    then
+    echo "$@"
+  fi
+}
+
+qprintf()
+{
+  if ((!quiet))
+	then
+  	printf "$@"
+  fi
+}
+
+##################################################
+# Displays usage help
+##################################################
+usage()
+	{
+	echo $"
+usage: $PGM sdN {-v|--verbose}
+         {-u|--unattended} {-q|--quiet}
+         {-S|--setup script}
+         {-m|--mountdir dir } {-y|--syncdir dir }
+         {-x} {-V|--version}
+
+    -v	    - verbose rsync, list all files as they are copied.
+    -u	    - unattended clone.  No confirmations asked,
+		but abort if disk needs initializing or on error.
+    -q      - quiet mode, no output unless errors or initializing. Implies -u.
+    -S scr  - Replaces standard setup script rpi-clone-setup with 'scr'
+    -e sdX  - edit destination fstab to change booted device names to new
+      	        device 'sdX'.  This is Only for fstabs that use device names.
+                Used for setting up a USB bootable disk.
+    -m dir  - Add dir to a custom list of mounted directories to sync.  Then
+                the custom list will be synced instead of the default of all
+                mounted directories.  The root directory is always synced.
+                Not for when initializing.
+    -y dir  - Add dir to a custom list of directories to sync.  Similar to -m
+                but dir is sync'ed as part of root (on its mount point) and
+                not as a separate partition
+    -x      - use set -x for very verbose bash shell script debugging
+    -V      - print $PGM version.
+
+
+  Makes a bootable snapshot of rootfs on another partition
+
+  The idea is to be able to generate a quick snapshot of the active mounted rootfs
+  on another boot disk partition and optionally modify cmdline.txt on boot
+  partition to reboot later over that image.
+
+  The script modifies the fstab on cloned partition to the new partition structure
+
+    $ sudo $PGM sdg
+
+  Clones can be from a booted SD card or USB disk.  For a description, example
+  clone runs and example usage of above options, see the README.md at:
+
+      https://github.com/AlbertoLopSie/rpi-snapshot
+
+  A line logging a $PGM run is written to $clone_log.
+
+  Download:
+    git clone hhttps://github.com/AlbertoLopSie/rpi-snapshot
+"
+	exit 1
+	}
+
+  ############################################################
+  # Hace rsync de $1 a $2 excluyendo los dirs indicados abajo
+  # si $3 es "with-root-excludes". Caso contrario solo excluye
+  # .gvfs y lost+found
+  ############################################################
+  rsync_file_system()
+  	{
+  	src_dir="$1"
+  	dst_dir="$2"
+
+  	qprintf "  => rsync $1 $2 $3 ..."
+
+    testing=0
+
+    if((!testing))
+    then
+    	if [ "$3" == "with-root-excludes" ]
+    	then
+    		rsync $rsync_options --delete \
+    			$exclude_swapfile \
+    			--exclude '.gvfs' \
+    			--exclude '/dev/*' \
+    			--exclude '/mnt/clone/*' \
+    			--exclude '/proc/*' \
+    			--exclude '/run/*' \
+    			--exclude '/sys/*' \
+    			--exclude '/tmp/*' \
+    			--exclude 'lost\+found/*' \
+    		$src_dir \
+    		$dst_dir
+    	else
+    		rsync $rsync_options --delete \
+    			--exclude '.gvfs' \
+    			--exclude 'lost\+found/*' \
+    		$src_dir \
+    		$dst_dir
+    	fi
+    fi
+
+    if [ "$rsync_extra_dirs" != "" ] && [ "$1" == "//" ]
+    then
+      qprintf "\n\nSyncing extra dirs:"
+      dirs=$rsync_extra_dirs
+      while [ "$dirs" != "" ]
+    	do
+        if( echo ${dirs} | grep -q "," )
+        then
+          adir=$(echo "$dirs" | sed -e "s/\(\S*\),\s*\(.*$\)/\1/")
+          dirs=$(echo "$dirs" | sed -e "s/\(\S*\),\s*\(.*$\)/\2/")
+        else
+          adir="$dirs"
+          dirs=""
+        fi
+
+      qprintf "\n  => rsync $adir/ $dst_dir$adir ..."
+
+      if((!testing))
+      then
+        rsync $rsync_options --delete \
+          $adir/ \
+      		$dst_dir$adir
+      fi
+
+      done
+      qprintf "\n"
+    fi
+  #set +x
+  	qecho ""
+  	}
+
+    ############################################################
+    # Procesa la linea de comandos
+    ############################################################
+
+    # command line
+    #
+    setup_args=""
+    edit_fstab_name=""
+    ext_label=""
+    verbose="no"
+
+    force_initialize=0
+    force_2_parts=0
+    force_sync=0
+    all_sync=0
+    usage_error=0
+    unattended=0
+    Unattended=0
+    quiet=0
+    custom_sync=0
+    leave_sd_usb_boot=0
+    convert_to_partuuid=0
+
+    rsync_extra_dirs=""
+
+    #set -x
+    while [ "$1" ]
+    do
+    	case "$1" in
+    		-v|--verbose)
+    			verbose="yes"
+    			rsync_options=${rsync_options}v
+    			;;
+    		-u|--unattended)
+    			unattended=1
+    			;;
+    		-U|--Unattended-init)
+    			unattended=1
+    			Unattended=1
+    			;;
+    		-q|--quiet)
+    			unattended=1
+    			quiet=1
+    			rsync_options=${rsync_options}q
+    			;;
+    		-s|--setup)
+    			shift
+    			if ! command -v $setup_command > /dev/null
+    			then
+    				echo "Cannot find script $setup_command for setup arg \"$1\"."
+    				usage_error=1
+    			fi
+    			if [ "$setup_args" == "" ]
+    			then
+    				setup_args="$1"
+    			else
+    				setup_args="$setup_args $1"
+    			fi
+    			;;
+        -S|--script)
+          shift
+          if ! command -v $1 > /dev/null
+          then
+            echo "Cannot find script $1"
+            usage_error=1
+          fi
+          $setup_command = $1
+          ;;
+    		-e|--edit-fstab)
+    			shift
+    			edit_fstab_name=$1
+    			;;
+    		-f|--force-initialize)
+    			force_initialize=1
+    			;;
+    		-f2)
+    			force_initialize=1
+    			force_2_parts=1
+    			;;
+        -2)
+    			force_2_parts=1
+    			;;
+    		-x)
+    			set -x
+    			;;
+    		-a|--all-sync)
+    			all_sync=1
+    			;;
+    		-m|--mountdir)
+    			shift
+    			mount_ok=0
+    			for ((p = 1; p <= n_src_parts; p++))
+    			do
+    				if ((!src_exists[p]))
+    				then
+    					continue
+    				fi
+    				if ((!custom_sync)) && ((p != root_part_num))
+    				then
+    					src_sync_part[p]=0
+    				fi
+    				if [ "${src_mounted_dir[p]}" == "$1" ]
+    				then
+    					src_sync_part[p]=1
+    					mount_ok=1
+    				fi
+    			done
+    			if ((!mount_ok))
+    			then
+    				echo "Asking to clone directory \"$1\", but it is not mounted."
+    				usage_error=1
+    			fi
+    			custom_sync=1
+    			;;
+        -y|--syncdir)
+    			shift
+          if [ "$rsync_extra_dirs" == "" ]
+    			then
+    				rsync_extra_dirs="$1"
+    			else
+    				rsync_extra_dirs="$rsync_extra_dirs, $1"
+    			fi
+    			;;
+    		-L|--label_partitions)
+    			shift
+    			ext_label=$1
+    			;;
+    		-l|--leave-sd-usb-boot)
+    			leave_sd_usb_boot=1
+    			;;
+    		-F|--Force-sync)
+    			force_sync=1
+    			;;
+    		--convert-fstab-to-partuuid)
+    			convert_to_partuuid=1
+    			;;
+    		-V|--version)
+    			echo $PGM Version: $version
+    			exit 0
+    			;;
+    		-h|--help)
+    			usage
+    			;;
+    		*)
+    			if [ "$dst_disk" != "" ]
+    			then
+    				echo "Bad args"
+    				usage
+    			fi
+          echo $1
+    			dst_disk=$1
+    			dir=`expr substr $dst_disk 1 5`
+    			if [ "$dir" == "/dev/" ]
+    			then
+    				dst_disk=${dst_disk#/dev/}
+    			fi
+    			;;
+    	esac
+    	shift
+    done
+
+
+
+    if [ "$dst_disk" = "" ]
+    then
+    	echo "No destination disk given."
+    	usage
+    fi
