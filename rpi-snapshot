@@ -766,9 +766,15 @@ rsync_file_system "/" "$target_mpoint" "with-root-excludes"
 # If fstab uses PARTUUID for rootfs
 if [ -f $fstab_dest ]
 then
+  qecho "√ Backing-up $fstab_dest as $fstab_dest".sav
+  cp $fstab_dest "$fstab_dest".sav
+
   if grep "^\s*[^#]" "$fstab_dest" | grep -q "PARTUUID=\s*\S\+\s\+\/\s\+.*" $fstab_dest
   then
+    # First comment all existing non-rootfs mountpoints for the new PARTUUID to avoid to be mounted twice
     qecho "√ Editing $fstab_dest references in snapshot from ${src_part_partuuid[$root_part_num]} to ${src_part_partuuid[$dst_part_num]}"
+    sed  -i "s/\(^\s*[^#]*PARTUUID=\s*${src_part_partuuid[$dst_part_num]}\s\+\/\S.*\)/# \1/"  $fstab_dest
+    # Next replace rootfs mountpoint with new PARTUUID
     sed -i "s/\(^\s*[^#].*ARTUUID=\s*\)${src_part_partuuid[$root_part_num]}\(\s\+\/\s\+.*\)/\1${src_part_partuuid[$dst_part_num]}\2/" $fstab_dest
   elif grep "^\s*[^#]" "$fstab_dest" | grep -q "${src_device[$root_part_num]}\s\+\/\s\+"
   then
@@ -783,18 +789,17 @@ fi
 
 if ((make_rootfs_next_boot))
 then
+  qecho "√ Backing-up $cmdline_txt as $cmdline_txt".sav
+  cp $cmdline_txt "$cmdline_txt".sav
+
   if grep -q "PARTUUID" $cmdline_txt
   then
     qecho "√ Editing $cmdline_txt to mount PARTUUID=${src_part_partuuid[$dst_part_num]} as rootfs on next boot"
-
-    cp $cmdline_txt "$cmdline_txt".sav
     sed -i "s/\(root=PARTUUID=\)\S\+\(\s\+.*\)/\1${src_part_partuuid[$dst_part_num]}\2/" $cmdline_txt
 
   elif grep -q ${src_device[$root_part_num]} $cmdline_txt
   then
     qecho "√ Editing $cmdline_txt to mount ${src_device[$dst_part_num]} as rootfs on next boot"
-
-    cp $cmdline_txt "$cmdline_txt".sav
     sed -i "s/\(root=\)\S\+\(\s\+.*\)/\1${src_device[$dst_part_num]}\2/" $cmdline_txt
   fi
 fi
