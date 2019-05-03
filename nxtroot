@@ -69,9 +69,10 @@ new_filename()
 usage()
 {
 	echo $"
-usage: $PGM <part> {-V|--version}
+usage: $PGM <part> {-s | --show-next-root} {-V|--version}
 
-    -V      - print $PGM version.
+    -s      - Shows root partition at next boot
+    -V      - Prints $PGM version.
 
   Edits 'root=' entry in /boot/cmdline.txt to set root partition at next boot.
 
@@ -171,19 +172,27 @@ done
 ############################################################
 # Process command line
 ############################################################
-nocheck=0
 
 #set -x
 while [ "$1" ]
 do
 	case "$1" in
-		-n|--nocheck)
-			nocheck=1
-			;;
 		-V|--version)
 			echo $PGM Version: $version
 			exit 0
 			;;
+    -s|--show-next-root)
+      if grep -q "PARTUUID" $cmdline_txt
+      then
+        nxtroot=$(sed "s/.*root=PARTUUID=\(\S\+\)\s\+.*/\1/" $cmdline_txt)
+      elif grep -q ${src_device[$root_part_num]} $cmdline_txt
+      then
+        nxtroot=$(sed "s/.*root=\(\S\+\)\s\+.*/\1/" $cmdline_txt)
+#        sed -i "s/\(root=\)\S\+\(\s\+.*\)/\1${src_device[$dst_part_num]}\2/" $cmdline_txt
+      fi
+      printf "\nroot partition at next boot: %s\n\n" $nxtroot
+      exit 0
+      ;;
 		-h|--help)
 			usage
 			;;
@@ -220,21 +229,21 @@ fi
 
 if [ -L "$dst_part"  ]
 then
-  echo "dst_part is a symlink"
+#  echo "dst_part is a symlink"
   dst_part=$(readlink -f $dst_part)
 fi
 
 if echo "$dst_part" |  grep -q  "^[0-9]\+\$"
 then
-  echo "dst_part is a number"
+#  echo "dst_part is a number"
   dst_part_num=$dst_part
 elif echo "$dst_part" |  grep -q  "^\(\|/dev/\)sd[a-z][0-9]\{1,3\}\$"
 then
-  echo "dst_part is a device"
+#  echo "dst_part is a device"
   dst_part_num=$(echo "$dst_part" | sed "s/.*sd[a-z]\([0-9]\{1,3\}\)/\1/")
 elif echo "$dst_part" |  grep -q  "^[[:xdigit:]]\{8\}-[[:xdigit:]]\{2\}\$"
 then
-  echo "dst_part is a PARTUUID"
+#  echo "dst_part is a PARTUUID"
   blkid_part=$(echo "$blkid_table" | grep "$dst_part")
   if [ "$blkid_part" != "" ]
   then
