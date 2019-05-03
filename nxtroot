@@ -1,0 +1,283 @@
+#!/bin/bash
+
+###############################################################################
+#
+# nxtroot is Copyright (c) 2019 Alberto Lopez Siemens
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted under the conditions of the BSD LICENSE file at
+# the nxtroot github source repository:
+#    https://github.com/AlbertoLopSie/nxtroot
+#
+# Some ideas and code portions borrowed from https://github.com/billw2/rpi-clone
+###############################################################################
+
+##################################################
+# Sets global variables
+##################################################
+version=1.0.0
+
+PGM=`basename $0`
+HOSTNAME=`hostname`
+
+cmdline_txt=/boot/cmdline.txt
+
+booted_root_part=""
+
+##################################################
+# Verifies we are running as root
+##################################################
+if [ `id -u` != 0 ]
+then
+    echo -e "$PGM needs to be run as root.\n"
+    exit 1
+fi
+
+qecho()
+{
+  if ((!quiet))
+    then
+    echo "$@"
+  fi
+}
+
+qprintf()
+{
+  if ((!quiet))
+	then
+  	printf "$@"
+  fi
+}
+
+new_filename()
+{
+  today="$( date +"%Y%m%d" )"
+  number=0
+  bname=$(echo $1 | sed "s/$2/\-$today/")
+  fname=$bname
+
+  while [ -e "$fname""$3" ]; do
+      printf -v fname -- '%s-%02d' "$bname"  "$(( ++number ))"
+  done
+
+  echo "$fname""$3"
+}
+
+##################################################
+# Displays usage help
+##################################################
+usage()
+{
+	echo $"
+usage: $PGM <part> {-V|--version}
+
+    -V      - print $PGM version.
+
+  Edits 'root=' entry in /boot/cmdline.txt to set root partition at next boot.
+
+  It can handle root=sdX and root=PARTUUID=xxxxxxxx-xx type entries.
+
+  '<part>' can be:
+       - a sdX type partition name (with or whithout preceding ''/dev/')
+       - a full PARTUUID with form <disk-id>-<part-num>
+       - a partition number (1 to 3 digits) It will taken as a sdX or PARTUUID
+         part-num based on the format of the root entry in cmdline.txt
+
+"
+  exit 1
+}
+
+get_src_disk()
+{
+  partition=${1#/dev/}
+  disk=${partition:: -1}
+  num="${partition: -1}"
+  if [[ $disk == *"mmcblk"* ]]
+  then
+  	SD_slot_boot=1
+  	disk=${disk:0:7}
+  	src_part_base=${disk}p
+  fi
+  printf -v "${2}" "%s" "$disk"
+  printf -v "${3}" "%s" "$num"
+}
+
+############################################################
+# Obtains info about source partitions
+############################################################
+src_boot_dev=`findmnt /boot -o source -n`
+src_root_dev=`findmnt / -o source -n`
+src_part_base=""
+
+boot_part_num=0
+alt_root_part_num=0
+
+if [ "$src_boot_dev" == "" ]
+then
+	get_src_disk "$src_root_dev" "src_disk" "unused"
+else
+	get_src_disk "$src_boot_dev" "src_disk" "boot_part_num"
+fi
+
+get_src_disk "$src_root_dev" "src_root_disk" "root_part_num"
+
+if [ "$src_disk" == "" ]
+then
+	echo "Cannot find booted device."
+	exit 1
+fi
+
+if [ "$src_part_base" == "" ]
+then
+	src_part_base=$src_disk
+fi
+
+fdisklist=$(fdisk -l /dev/$src_disk)
+src_fdisk_table=$(echo "$fdisklist" | grep "^/dev/")
+tmp=$(echo "$fdisklist" | grep "Disk identifier:")
+src_disk_ID=${tmp#*x}
+
+blkid_table=$(blkid)
+
+n_src_parts=$(echo "$src_fdisk_table" | tail -n 1 | sed "s/[^0-9]*\([0-9]\+\)\s.*/\1/")
+
+for ((p = 1; p <= n_src_parts; p++))
+do
+  line=$(echo "$src_fdisk_table" | grep -e "^/dev/$src_disk${p}")
+
+  src_part_num[p]=${p}
+
+	if [ "$line" == "" ]
+	then
+		src_exists[p]=0
+		continue
+	fi
+	src_exists[p]=1
+
+	if ((p == root_part_num))
+	then
+		src_partition[p]=${src_root_dev#/dev/}
+		src_device[p]=$src_root_dev
+	else
+		src_partition[p]="${src_part_base}${p}"
+		src_device[p]="/dev/${src_partition[p]}"
+	fi
+
+  blkid=$(echo "$blkid_table" | grep -e "^${src_device[p]}:")
+  src_part_uuid[p]=$(echo "$blkid" | sed -e "s/\(.*\sUUID=\"\)\(\S\+\)\(\".*\)/\2/")
+  src_part_partuuid[p]=$(echo "$blkid" | sed -e "s/\(.*\sPARTUUID=\"\)\(\S\+\)\(\".*\)/\2/")
+done
+
+############################################################
+# Process command line
+############################################################
+nocheck=0
+
+#set -x
+while [ "$1" ]
+do
+	case "$1" in
+		-n|--nocheck)
+			nocheck=1
+			;;
+		-V|--version)
+			echo $PGM Version: $version
+			exit 0
+			;;
+		-h|--help)
+			usage
+			;;
+		*)
+      if [ "$dst_part" != "" ]
+      then
+        echo "Bad args"
+        usage
+      fi
+      dst_part=$1
+      ;;
+	esac
+	shift
+done
+
+
+#########################################################
+# Starts determining source and target devices/partitions
+#########################################################
+if [ "$dst_part" = "" ]
+then
+	echo "No destination part given."
+	usage
+fi
+
+# dst_part forms:
+# X
+# [/dev/]sdX
+# symlink to /dev/sdX
+# xxxxxxxx-xx
+#
+# X is a 1-3 digit partition number
+#
+
+if [ -L "$dst_part"  ]
+then
+  echo "dst_part is a symlink"
+  dst_part=$(readlink -f $dst_part)
+fi
+
+if echo "$dst_part" |  grep -q  "^[0-9]\+\$"
+then
+  echo "dst_part is a number"
+  dst_part_num=$dst_part
+elif echo "$dst_part" |  grep -q  "^\(\|/dev/\)sd[a-z][0-9]\{1,3\}\$"
+then
+  echo "dst_part is a device"
+  dst_part_num=$(echo "$dst_part" | sed "s/.*sd[a-z]\([0-9]\{1,3\}\)/\1/")
+elif echo "$dst_part" |  grep -q  "^[[:xdigit:]]\{8\}-[[:xdigit:]]\{2\}\$"
+then
+  echo "dst_part is a PARTUUID"
+  blkid_part=$(echo "$blkid_table" | grep "$dst_part")
+  if [ "$blkid_part" != "" ]
+  then
+    dst_part_num=$(echo "$blkid_part" | sed "s/.*sd[a-z]\([0-9]\{1,3\}\).*/\1/")
+  else
+    qprintf "\nPARTUUID: %s not found in partition table\n\n" $dst_part
+    exit 1
+  fi
+fi
+
+
+if (( $dst_part_num < $n_src_parts ))
+then
+  dst_part=${src_partition[$dst_part_num]}
+else
+  echo $"
+  Cannot find '$dst_part' in the partition table.  The partition table is:
+  "
+	cat /proc/partitions
+	exit 1
+fi
+
+####################################################################
+# 4- Modify next boot part
+####################################################################
+#echo $cmdline_txt
+#echo $dst_part
+#echo ${src_part_partuuid[$dst_part_num]}
+#echo ${src_device[$dst_part_num]}
+
+savfile=$(new_filename "$cmdline_txt" ".txt" ".sav")
+qecho "√ Backing-up $cmdline_txt as $savfile"
+cp $cmdline_txt $savfile
+
+if grep -q "PARTUUID" $cmdline_txt
+then
+  qecho "√ Editing $cmdline_txt to mount PARTUUID=${src_part_partuuid[$dst_part_num]} as rootfs on next boot"
+  sed -i "s/\(root=PARTUUID=\)\S\+\(\s\+.*\)/\1${src_part_partuuid[$dst_part_num]}\2/" $cmdline_txt
+
+elif grep -q ${src_device[$root_part_num]} $cmdline_txt
+then
+  qecho "√ Editing $cmdline_txt to mount ${src_device[$dst_part_num]} as rootfs on next boot"
+  sed -i "s/\(root=\)\S\+\(\s\+.*\)/\1${src_device[$dst_part_num]}\2/" $cmdline_txt
+fi
+
+exit 0

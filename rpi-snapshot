@@ -457,7 +457,7 @@ do
   src_part_uuid[p]=$(echo "$blkid" | sed -e "s/\(.*\sUUID=\"\)\(\S\+\)\(\".*\)/\2/")
   src_part_partuuid[p]=$(echo "$blkid" | sed -e "s/\(.*\sPARTUUID=\"\)\(\S\+\)\(\".*\)/\2/")
 
-  dfline=$(echo "$src_df_table" | grep -m 1 "^${src_device[p]} ")
+  dfline=$(echo "$src_df_table" | grep -m 1 "^${src_device[p]}\s")
   blocks=$(echo "$dfline" | cut -d " " -f 3)
 
 	# parted sectors are 512 bytes
@@ -469,7 +469,7 @@ do
 	part_type=$(echo "$line" | cut -d ":" -f 5)
 
 	src_mounted_dir[p]=$(echo "$src_mount_table" \
-						| grep -m 1 -e "^${src_device[p]}" | cut -d " " -f 2)
+						| grep -m 1 -e "^${src_device[p]}\s" | cut -d " " -f 2)
 	if [ "${src_mounted_dir[p]}" != "" ]
 	then
 		src_sync_part[p]=1
@@ -591,11 +591,11 @@ do
 			fi
 #      echo $1
 			dst_part=$1
-			dir=`expr substr $dst_part 1 5`
-			if [ "$dir" == "/dev/" ]
-			then
-				dst_part=${dst_disk#/dev/}
-			fi
+#			dir=`expr substr $dst_part 1 5`
+#			if [ "$dir" == "/dev/" ]
+#			then
+#				dst_part=${dst_part#/dev/}
+#			fi
 			;;
 	esac
 	shift
@@ -608,8 +608,20 @@ done
 
 if [ "$dst_part" = "" ]
 then
-	echo "No destination disk given."
+	echo "No destination part given."
 	usage
+fi
+
+if [ -L "$dst_part"  ]
+then
+  dst_part=$(readlink -f $dst_part)
+#  echo "Destination is a symlink.: $dst_part"
+fi
+
+dir=`expr substr $dst_part 1 5`
+if [ "$dir" == "/dev/" ]
+then
+	dst_part=${dst_part#/dev/}
 fi
 
 chk_disk=`cat /proc/partitions | grep -m 1 $dst_part`
@@ -733,7 +745,7 @@ then
 fi
 
 confirm "Ok to proceed with the clone?" "abort"
-start_time=`date '+%H:%M:%S'`
+start_time=`date '+%d/%m/%y %H:%M:%S'`
 start_sec=$(date '+%s')
 
 sync
@@ -789,18 +801,19 @@ fi
 
 if ((make_rootfs_next_boot))
 then
-  qecho "√ Backing-up $cmdline_txt as $cmdline_txt".sav
-  cp $cmdline_txt "$cmdline_txt".sav
-
-  if grep -q "PARTUUID" $cmdline_txt
-  then
-    qecho "√ Editing $cmdline_txt to mount PARTUUID=${src_part_partuuid[$dst_part_num]} as rootfs on next boot"
-    sed -i "s/\(root=PARTUUID=\)\S\+\(\s\+.*\)/\1${src_part_partuuid[$dst_part_num]}\2/" $cmdline_txt
-
-  elif grep -q ${src_device[$root_part_num]} $cmdline_txt
-  then
-    qecho "√ Editing $cmdline_txt to mount ${src_device[$dst_part_num]} as rootfs on next boot"
-    sed -i "s/\(root=\)\S\+\(\s\+.*\)/\1${src_device[$dst_part_num]}\2/" $cmdline_txt
+  nxtroot $dst_part_num
+#  qecho "√ Backing-up $cmdline_txt as $cmdline_txt".sav
+#  cp $cmdline_txt "$cmdline_txt".sav
+#
+#  if grep -q "PARTUUID" $cmdline_txt
+#  then
+#    qecho "√ Editing $cmdline_txt to mount PARTUUID=${src_part_partuuid[$dst_part_num]} as rootfs on next boot"
+#    sed -i "s/\(root=PARTUUID=\)\S\+\(\s\+.*\)/\1${src_part_partuuid[$dst_part_num]}\2/" $cmdline_txt
+#
+#  elif grep -q ${src_device[$root_part_num]} $cmdline_txt
+#  then
+#    qecho "√ Editing $cmdline_txt to mount ${src_device[$dst_part_num]} as rootfs on next boot"
+#    sed -i "s/\(root=\)\S\+\(\s\+.*\)/\1${src_device[$dst_part_num]}\2/" $cmdline_txt
   fi
 fi
 
@@ -825,7 +838,7 @@ echo "$date  $HOSTNAME $PGM : snapshot to ${src_device[$dst_part_num]} ($dst_roo
 
 stop_sec=$(date '+%s')
 clone_sec=$((stop_sec - start_sec))
-stop_time=`date '+%H:%M:%S'`
+stop_time=`date '+%d/%m/%y %H:%M:%S'`
 
 printf "\n========================================================================================\n"
 qecho "Done with snapshot to ${src_device[$dst_part_num]}"
@@ -835,17 +848,19 @@ qprintf "   Start - %s    End - %s    Elapsed Time - %d:%02d\n" \
 ####################################################################
 # Pause before unmounting partitions
 ####################################################################
-if ["$unmount_list" != ""] && ((!unattended))
+
+if [ "$unmount_list" != "" ] && ((!unattended))
 then
 	echo -n $"
-Cloned partitions are mounted on $target_mpoint for inspection or customizing.
+Cloned partition is mounted on $target_mpoint for inspection or customizing.
 
-Hit Enter when ready to unmount the ${src_device[$dst_part_num]} partition..."
+Hit Enter when ready to unmount the $unmount_list partition..."
 
 	read resp
+#  Hit Enter when ready to unmount the ${src_device[$dst_part_num]} partition..."
+  unmount_list "$unmount_list"
 fi
 
-unmount_list "$unmount_list"
 printf "========================================================================================\n\n"
 
 exit 0
