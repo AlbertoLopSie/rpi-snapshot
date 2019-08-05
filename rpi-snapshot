@@ -570,7 +570,8 @@ do
       ;;
       -c|--comment)
         shift
-        $log_comment = "($1)"
+        log_comment="($1)"
+        echo "comment: '$log_comment'"
         ;;
 		-x)
 			set -x
