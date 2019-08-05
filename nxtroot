@@ -15,7 +15,7 @@
 ##################################################
 # Sets global variables
 ##################################################
-version=1.0.0
+version=1.0.1
 
 PGM=`basename $0`
 HOSTNAME=`hostname`
@@ -69,10 +69,11 @@ new_filename()
 usage()
 {
 	echo $"
-usage: $PGM <part> {-s | --show-next-root} {-V|--version}
+usage: $PGM <part> {-s | --show-next-root} {--reboot} {-V|--version}
 
-    -s      - Shows root partition at next boot
-    -V      - Prints $PGM version.
+    -s       - Shows root partition at next boot
+    --reboot - Reboots after setting next root partition
+    -V       - Prints $PGM version.
 
   Edits 'root=' entry in /boot/cmdline.txt to set root partition at next boot.
 
@@ -101,6 +102,19 @@ get_src_disk()
   fi
   printf -v "${2}" "%s" "$disk"
   printf -v "${3}" "%s" "$num"
+}
+
+show_next_root()
+{
+  if grep -q "PARTUUID" $cmdline_txt
+  then
+    nxtroot=$(sed "s/.*root=PARTUUID=\(\S\+\)\s\+.*/\1/" $cmdline_txt)
+  elif grep -q ${src_device[$root_part_num]} $cmdline_txt
+  then
+    nxtroot=$(sed "s/.*root=\(\S\+\)\s\+.*/\1/" $cmdline_txt)
+  #        sed -i "s/\(root=\)\S\+\(\s\+.*\)/\1${src_device[$dst_part_num]}\2/" $cmdline_txt
+  fi
+  printf "\nRoot partition at next boot: %s\n\n" $nxtroot
 }
 
 ############################################################
@@ -173,6 +187,7 @@ done
 # Process command line
 ############################################################
 
+reboots=0
 #set -x
 while [ "$1" ]
 do
@@ -182,17 +197,12 @@ do
 			exit 0
 			;;
     -s|--show-next-root)
-      if grep -q "PARTUUID" $cmdline_txt
-      then
-        nxtroot=$(sed "s/.*root=PARTUUID=\(\S\+\)\s\+.*/\1/" $cmdline_txt)
-      elif grep -q ${src_device[$root_part_num]} $cmdline_txt
-      then
-        nxtroot=$(sed "s/.*root=\(\S\+\)\s\+.*/\1/" $cmdline_txt)
-#        sed -i "s/\(root=\)\S\+\(\s\+.*\)/\1${src_device[$dst_part_num]}\2/" $cmdline_txt
-      fi
-      printf "\nroot partition at next boot: %s\n\n" $nxtroot
+      show_next_root
       exit 0
       ;;
+    --reboot)
+			reboots=1
+			;;
 		-h|--help)
 			usage
 			;;
@@ -214,8 +224,10 @@ done
 #########################################################
 if [ "$dst_part" = "" ]
 then
-	echo "No destination part given."
-	usage
+  show_next_root
+  echo "type $PGM -h for options
+  "
+  exit 0
 fi
 
 # dst_part forms:
@@ -289,4 +301,9 @@ then
   sed -i "s/\(root=\)\S\+\(\s\+.*\)/\1${src_device[$dst_part_num]}\2/" $cmdline_txt
 fi
 
+if ((reboots))
+then
+  echo "Rebooting..."
+  reboot
+fi
 exit 0
