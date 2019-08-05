@@ -15,7 +15,7 @@
 ##################################################
 # Sets global variables
 ##################################################
-version=1.0.0
+version=1.1.0
 
 PGM=`basename $0`
 HOSTNAME=`hostname`
@@ -822,8 +822,8 @@ fi
 # Generate Log entries
 ####################################################################
 date=`date '+%F %H:%M'`
-echo "$date  $HOSTNAME $PGM : snapshot $src_device[$src_part_num] to ${src_device[$dst_part_num]}, $src_used_readable $log_comment" >> $snap_log
-echo "$date  $HOSTNAME $PGM : snapshot $src_device[$src_part_num] to ${src_device[$dst_part_num]}, $src_used_readable $log_comment" >> ${target_mpoint}${snap_log}
+echo "$date  $HOSTNAME $PGM : snapshot ${src_device[$src_part_num]} to ${src_device[$dst_part_num]}, ${src_used_readable} $log_comment" >> $snap_log
+echo "$date  $HOSTNAME $PGM : snapshot ${src_device[$src_part_num]} to ${src_device[$dst_part_num]}, ${src_used_readable} $log_comment" >> ${target_mpoint}${snap_log}
 
 stop_sec=$(date '+%s')
 clone_sec=$((stop_sec - start_sec))
