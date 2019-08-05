@@ -138,6 +138,7 @@ usage()
 {
 	echo $"
 usage: $PGM sdN {-v|--verbose} {-u|--unattended} {-q|--quiet}
+         {-c|--comment snapshot-comment}
          {-S|--setup script}
          {-y|--syncdir dir}
          {-b|--boot-new-rootfs}
@@ -145,14 +146,15 @@ usage: $PGM sdN {-v|--verbose} {-u|--unattended} {-q|--quiet}
 
     -v	    - verbose rsync, list all files as they are copied.
     -u	    - unattended clone.  No confirmations asked,
-		but abort if disk needs initializing or on error.
+		          but aborts if disk needs initializing or on error.
     -q      - quiet mode, no output unless errors or initializing. Implies -u.
     -S scr  - Replaces standard setup script rpi-clone-setup with 'scr'
     -y dir  - Add dir to a custom list of directories to sync.  dir is
-                sync'ed as part of root (on its mount point) and not as a
-                separate partition
+              sync'ed as part of root (on its mount point) and not as a
+              separate partition
     -b      - Make snapshot rootfs at next boot. Modifies /boot/cmdline.txt
-                to maount snapshot partition as rootfs on next boot
+              to maount snapshot partition as rootfs on next boot
+    -c      - Add comment to snapshot logfile(s) ($snap_log)
     -x      - use set -x for very verbose bash shell script debugging
     -V      - print $PGM version.
 
@@ -297,12 +299,9 @@ print_partitions()
 	readable $src_disk_size "512" src_size_readable
 	readable $dst_disk_size "512" dst_size_readable
 
-	printf "\n%-43s%s" "Booted disk: $src_disk $src_size_readable" #\
-#				"                 Destination disk: $dst_disk $dst_size_readable"
-# echo $"----------------------------------------------------------------------------------------"
+	printf "\n%-43s%s" "Booted disk: $src_disk $src_size_readable"
   echo $"
 ----------------------------------------------------------"
-# out=$'Part,   Size,   Used,FS,Label         ,Part, Size,FS,Label\n'
   out=$'Part,   Size,   Used,FS,Label\n'
 	for ((p = 1; p <= n_parts; p++))
 	do
@@ -523,7 +522,7 @@ do
 done
 
 ############################################################
-# Procesa la linea de comandos
+# Process command line
 ############################################################
 
 # command line
@@ -532,6 +531,7 @@ setup_args=""
 edit_fstab_name=""
 ext_label=""
 verbose="no"
+log_comment=""
 
 usage_error=0
 unattended=0
@@ -568,6 +568,10 @@ do
       fi
       $setup_command = $1
       ;;
+      -c|--comment)
+        shift
+        $log_comment = "($1)"
+        ;;
 		-x)
 			set -x
 			;;
@@ -593,13 +597,7 @@ do
 				echo "Bad args"
 				usage
 			fi
-#      echo $1
 			dst_part=$1
-#			dir=`expr substr $dst_part 1 5`
-#			if [ "$dir" == "/dev/" ]
-#			then
-#				dst_part=${dst_part#/dev/}
-#			fi
 			;;
 	esac
 	shift
@@ -806,19 +804,6 @@ fi
 if ((make_rootfs_next_boot))
 then
   nxtroot $dst_part_num
-#  qecho "√ Backing-up $cmdline_txt as $cmdline_txt".sav
-#  cp $cmdline_txt "$cmdline_txt".sav
-#
-#  if grep -q "PARTUUID" $cmdline_txt
-#  then
-#    qecho "√ Editing $cmdline_txt to mount PARTUUID=${src_part_partuuid[$dst_part_num]} as rootfs on next boot"
-#    sed -i "s/\(root=PARTUUID=\)\S\+\(\s\+.*\)/\1${src_part_partuuid[$dst_part_num]}\2/" $cmdline_txt
-#
-#  elif grep -q ${src_device[$root_part_num]} $cmdline_txt
-#  then
-#    qecho "√ Editing $cmdline_txt to mount ${src_device[$dst_part_num]} as rootfs on next boot"
-#    sed -i "s/\(root=\)\S\+\(\s\+.*\)/\1${src_device[$dst_part_num]}\2/" $cmdline_txt
-#  fi
 fi
 
 ####################################################################
@@ -837,8 +822,8 @@ fi
 # Generate Log entries
 ####################################################################
 date=`date '+%F %H:%M'`
-echo "$date  $HOSTNAME $PGM : snapshot to ${src_device[$dst_part_num]} ($dst_root_vol_name)" >> $snap_log
-echo "$date  $HOSTNAME $PGM : snapshot to ${src_device[$dst_part_num]} ($dst_root_vol_name)" >> ${target_mpoint}${snap_log}
+echo "$date  $HOSTNAME $PGM : snapshot to ${src_device[$dst_part_num]} $log_comment" >> $snap_log
+echo "$date  $HOSTNAME $PGM : snapshot to ${src_device[$dst_part_num]} $log_comment" >> ${target_mpoint}${snap_log}
 
 stop_sec=$(date '+%s')
 clone_sec=$((stop_sec - start_sec))
