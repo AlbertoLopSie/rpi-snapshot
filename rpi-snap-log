@@ -15,8 +15,6 @@
 date=`date '+%F %H:%M'`
 HOSTNAME=`hostname`
 
-echo $1,  $2, $3, $4, $5
-
 PGM=$1
 src=$2
 dst=$3
