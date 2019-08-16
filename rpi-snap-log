@@ -1,0 +1,28 @@
+#!/bin/bash
+
+###############################################################################
+#
+# rpi-snap-log is Copyright (c) 2019 Alberto Lopez Siemens
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted under the conditions of the BSD LICENSE file at
+# the rpi-snapshot github source repository:
+#    https://github.com/AlbertoLopSie/rpi-snapshot
+#
+# Some ideas and code portions borrowed from https://github.com/billw2/rpi-clone
+###############################################################################
+
+date=`date '+%F %H:%M'`
+HOSTNAME=`hostname`
+
+echo $1,  $2, $3, $4, $5
+
+PGM=$1
+src=$2
+dst=$3
+size=$4
+log_comment="($5)"
+snap_log=/var/log/$PGM.log
+target_mpoint=$6
+
+echo "$date  $HOSTNAME $PGM: snapshot $src to $dst copied $size $log_comment" >> ${target_mpoint}${snap_log}

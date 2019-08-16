@@ -142,6 +142,7 @@ usage: $PGM sdN {-v|--verbose} {-u|--unattended} {-q|--quiet}
          {-S|--setup script}
          {-y|--syncdir dir}
          {-b|--boot-new-rootfs}
+         {--boot}
          {-x} {-V|--version}
 
     -v	    - verbose rsync, list all files as they are copied.
@@ -153,7 +154,8 @@ usage: $PGM sdN {-v|--verbose} {-u|--unattended} {-q|--quiet}
               sync'ed as part of root (on its mount point) and not as a
               separate partition
     -b      - Make snapshot rootfs at next boot. Modifies /boot/cmdline.txt
-              to maount snapshot partition as rootfs on next boot
+              to mount snapshot partition as rootfs on next boot
+    --boot  - Same as above but reboots after setting next root partition
     -c      - Add comment to snapshot logfile(s) ($snap_log)
     -x      - use set -x for very verbose bash shell script debugging
     -V      - print $PGM version.
@@ -226,7 +228,7 @@ rsync_file_system()
 
 	qprintf "  => rsync $1 $2 $3 ..."
 
-  testing=0
+  testing=1
 
   if((!testing))
   then
@@ -537,7 +539,7 @@ usage_error=0
 unattended=0
 quiet=0
 make_rootfs_next_boot=0
-
+reboots=0
 rsync_extra_dirs=""
 
 #set -x
@@ -559,6 +561,10 @@ do
     -b|--boot-new-rootfs)
 			make_rootfs_next_boot=1
 			;;
+    --boot)
+			make_rootfs_next_boot=1
+      reboots=1
+			;;
     -S|--script)
       shift
       if ! command -v $1 > /dev/null
@@ -570,7 +576,7 @@ do
       ;;
       -c|--comment)
         shift
-        log_comment="($1)"
+        log_comment="$1"
         ;;
 		-x)
 			set -x
@@ -823,8 +829,11 @@ fi
 ####################################################################
 date=`date '+%F %H:%M'`
 readable ${src_used_sectors[$root_part_num]} "512" src_used_readable
-echo "$date  $HOSTNAME $PGM: snapshot ${src_device[$root_part_num]} to ${src_device[$dst_part_num]} copied ${src_used_readable} $log_comment" >> $snap_log
-echo "$date  $HOSTNAME $PGM: snapshot ${src_device[$root_part_num]} to ${src_device[$dst_part_num]} copied ${src_used_readable} $log_comment" >> ${target_mpoint}${snap_log}
+#echo "$date  $HOSTNAME $PGM: snapshot ${src_device[$root_part_num]} to ${src_device[$dst_part_num]} copied ${src_used_readable} $log_comment" >> $snap_log
+rpi-snap-log $PGM ${src_device[$root_part_num]} ${src_device[$dst_part_num]} ${src_used_readable} $log_comment
+
+#echo "$date  $HOSTNAME $PGM: snapshot ${src_device[$root_part_num]} to ${src_device[$dst_part_num]} copied ${src_used_readable} $log_comment" >> ${target_mpoint}${snap_log}
+rpi-snap-log $PGM ${src_device[$root_part_num]} ${src_device[$dst_part_num]} ${src_used_readable} $log_comment ${target_mpoint}
 
 stop_sec=$(date '+%s')
 clone_sec=$((stop_sec - start_sec))
@@ -853,4 +862,9 @@ fi
 
 printf "========================================================================================\n\n"
 
+if ((reboots))
+then
+  echo "Rebooting..."
+  reboot
+fi
 exit 0
